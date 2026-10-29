@@ -19,6 +19,7 @@ CAMPOS = {
     (None, "quantidade_contas"): (int, 1, MAX_CONTAS, False),
     (None, "max_simultaneas"): (int, 1, LIMITE_TERMOS, True),
     (None, "iniciar_contas_ao_abrir"): (bool, None, None, False),
+    (None, "intervalo_inicio_segundos"): (int, 0, 300, True),
     ("intervalos", "verificacao_segundos"): (int, 1, 60, True),
     ("intervalos", "sem_resposta_recarregar_segundos"): (int, 15, 3600, True),
     ("intervalos", "sem_batalha_recarregar_segundos"): (int, 30, 7200, True),
@@ -29,11 +30,21 @@ CAMPOS = {
     ("farm", "log_cada_batalha"): (bool, None, None, True),
     ("farm", "reabrir_navegador"): (bool, None, None, True),
     ("farm", "limite_memoria_pagina_mb"): (int, 0, 16000, True),
+    ("farm", "avancar_melhor_hunt"): (bool, None, None, True),
+    ("farm", "objetivo_hunt"): (str, ("xp_pokemon", "xp_treinador", "ouro"), None, True),
+    ("farm", "risco_maximo_hunt"): (str, ("baixo", "medio"), None, True),
+    ("farm", "usar_medicoes_reais"): (bool, None, None, True),
+    ("farm", "reavaliar_hunt_minutos"): (int, 5, 240, True),
+    ("farm", "ganho_minimo_troca_pct"): (int, 1, 100, True),
     ("janela", "zoom"): (float, 0.5, 2.0, False),
     ("janela", "layout_ver_todas"): (str, ("grade", "celulares"), None, True),
     ("janela", "painel_conta"): (bool, None, None, True),
     ("janela", "guia_mercado_visto"): (bool, None, None, True),
+    ("janela", "fechar_para_bandeja"): (bool, None, None, True),
+    ("janela", "minimizar_para_bandeja"): (bool, None, None, True),
+    ("janela", "iniciar_na_bandeja"): (bool, None, None, False),
     ("desempenho", "modo_leve"): (bool, None, None, False),
+    ("desempenho", "economia_em_segundo_plano"): (bool, None, None, True),
     ("atualizacao", "avisar"): (bool, None, None, True),
 }
 ATALHOS = ("conta_1", "conta_2", "conta_3", "conta_4", "ver_todas", "hunts", "rmt", "pokedex", "pausar_retomar",
@@ -80,7 +91,9 @@ def validar(valores: dict, contas: list[dict]) -> None:
             raise ErroConfig(nome, "precisa ser um número inteiro")
         if k == "limite_memoria_pagina_mb" and 0 < v < 500:
             raise ErroConfig(nome, "use 0 (desligado) ou pelo menos 500 MB")
-        if not mn <= v <= mx:
+        if mx is None and v < mn:
+            raise ErroConfig(nome, f"precisa ser pelo menos {mn}")
+        if mx is not None and not mn <= v <= mx:
             raise ErroConfig(nome, f"precisa estar entre {mn} e {mx}")
     usados = {}
     for k in ATALHOS:

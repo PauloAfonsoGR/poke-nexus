@@ -70,7 +70,7 @@ TR_XP = "tr-xp-txt"
 # Avalia, numa chamada só, o que está na tela.
 JS_LER_TELA = """() => {
   const el = (id) => document.getElementById(id);
-  const vis = (id) => { const e = el(id); return !!e && !e.classList.contains('hidden')
+  const vis = (id) => { const e = el(id); return !!e && !e.closest('.hidden')
       && getComputedStyle(e).display !== 'none'; };
   const txt = (id) => (el(id)?.textContent ?? '').trim();
   const ids = %s;

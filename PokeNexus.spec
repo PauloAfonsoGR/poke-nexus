@@ -6,6 +6,8 @@
 # (QtWebEngineProcess.exe); no modo de arquivo único ele seria extraído para uma pasta
 # temporária a CADA abertura. Em pasta, abre na hora.
 import os
+import shutil
+import PySide6
 
 a = Analysis(
     ["main.py"],
@@ -50,6 +52,12 @@ RECURSOS_FORA = ("qtwebengine_devtools_resources.pak", "qtwebengine_devtools_res
 def manter(entry):
     destino = entry[0].replace("\\", "/")
     nome = destino.rsplit("/", 1)[-1]
+    # Qt uses the ICU implementation provided by Windows. Build environments that
+    # expose Poppler on PATH can make PyInstaller collect Poppler's private ICU by
+    # mistake (versioned exports), causing WinError 127 while importing QtCore.
+    if nome.casefold() == "icuuc.dll" or (nome.casefold().startswith("icudt")
+                                           and nome.casefold().endswith(".dll")):
+        return False
     if destino in ("libcrypto-3-x64.dll", "libssl-3-x64.dll"):
         return False                  # OpenSSL do plugin de TLS do Qt (o navegador tem o próprio)
     if not destino.startswith("PySide6/"):
@@ -76,6 +84,25 @@ def manter(entry):
 
 a.datas = [e for e in a.datas if manter(e)]
 a.binaries = [e for e in a.binaries if manter(e)]
+# Python, Windows, and PySide6 can provide different MSVC runtime revisions.
+# Mixing PySide's VCRUNTIME with system MSVCP/CONCRT can also break QtCore loading
+# ("The specified procedure could not be found"), so bundle PySide's full set.
+PYSIDE_DIR = os.path.dirname(PySide6.__file__)
+MSVC_RUNTIME = (
+    "CONCRT140.dll",
+    "MSVCP140.dll",
+    "MSVCP140_1.dll",
+    "MSVCP140_2.dll",
+    "MSVCP140_CODECVT_IDS.dll",
+    "VCRUNTIME140.dll",
+    "VCRUNTIME140_1.dll",
+)
+a.binaries = [e for e in a.binaries if os.path.basename(e[0]).casefold()
+              not in {n.casefold() for n in MSVC_RUNTIME}]
+for nome in MSVC_RUNTIME:
+    origem = os.path.join(PYSIDE_DIR, nome.lower())
+    if os.path.isfile(origem):
+        a.binaries.append((nome, origem, "BINARY"))
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -97,3 +124,13 @@ coll = COLLECT(
     upx=False,
     name="PokeNexus",
 )
+
+# The bootloader searches beside the executable before `_internal` is initialized.
+# Keep the same complete set at the package root so the Windows loader never combines
+# a bundled DLL with a different globally installed revision.
+for nome in MSVC_RUNTIME:
+    origem = os.path.join(PYSIDE_DIR, nome.lower())
+    if os.path.isfile(origem):
+        destino = os.path.join(DISTPATH, "PokeNexus", nome)
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        shutil.copy2(origem, destino)

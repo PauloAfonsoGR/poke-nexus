@@ -8,6 +8,7 @@ import asyncio
 import queue
 import threading
 import time
+from collections import Counter
 from datetime import datetime
 
 from app.config import LOGS_DIR, Account
@@ -28,7 +29,10 @@ class Manager:
         self.cfg = cfg
         self.accounts = accounts
         self.web = web
-        self.logs: queue.Queue[str] = queue.Queue()
+        self.logs: queue.Queue[str] = queue.Queue(maxsize=4000)
+        self._reservas = Counter()
+        self._reserva_lock = threading.RLock()
+        self._comandos: dict[int, asyncio.Lock] = {}
         self._log_dia = None
         self._log_arq = None
         self._log_trava = threading.Lock()
@@ -70,9 +74,28 @@ class Manager:
             self._log(None, f"erro interno: {fut.exception()}")
 
     # ------------------------------------------------------------- comandos
+    def _comando_conta(self, i, fn, *args, reservar=False):
+        """Serializa abrir/parar/reiniciar por conta e reserva a vaga antes de sair da UI."""
+        if reservar:
+            with self._reserva_lock:
+                self._reservas[i] += 1
+
+        async def executar():
+            try:
+                async with self._comandos.setdefault(i, asyncio.Lock()):
+                    retorno = fn(*args)
+                    if asyncio.iscoroutine(retorno):
+                        await retorno
+            finally:
+                if reservar:
+                    with self._reserva_lock:
+                        self._reservas[i] -= 1
+        return self._call(executar)
+
     def connected_count(self, excluding: int | None = None) -> int:
-        return sum(1 for w in self.workers
-                   if w.acc.index != excluding and (w.running or w.pending_start or w.login_open))
+        with self._reserva_lock:
+            return sum(1 for w in self.workers if w.acc.index != excluding and
+                       (w.running or w.pending_start or w.login_open or self._reservas[w.acc.index]))
 
     def can_connect(self, i: int) -> tuple[bool, str]:
         w = self.workers[i]
@@ -80,37 +103,49 @@ class Manager:
             return False, f"{w.acc.name} está desativada no config.toml (ativa = false)."
         limite = self.cfg["max_simultaneas"]
         if self.connected_count(excluding=i) >= limite:
-            return False, (f"Já há {limite} contas conectadas. Os Termos do PokeIdle permitem no "
-                           f"máximo 4 contas conectadas por rede. Pare uma conta antes.")
+            return False, (f"O limite local é {limite} sessões. Pare uma conta ou ajuste "
+                           "'Máximo conectadas ao mesmo tempo'. O servidor tem limites próprios.")
         return True, ""
 
-    def start_account(self, i: int) -> tuple[bool, str]:
+    def start_account(self, i: int, atraso: float = 0) -> tuple[bool, str]:
+        with self._reserva_lock:
+            if self.workers[i].running or self._reservas[i]:
+                return True, ""
+            return self._iniciar_conta(i, atraso)
+
+    def _iniciar_conta(self, i: int, atraso: float) -> tuple[bool, str]:
         ok, motivo = self.can_connect(i)
         if not ok:
             self._log(i, f"não iniciada: {motivo}")
             return False, motivo
         self._log(i, "iniciando")
-        self.workers[i].pending_start = True
-        self._call(self.workers[i].start)
+        self._comando_conta(i, self.workers[i].start, atraso, reservar=True)
         return True, ""
 
     def start_all(self):
+        ordem = 0
         for w in self.workers:
-            if w.acc.enabled and not w.running:
-                if not self.start_account(w.acc.index)[0]:
+            if w.acc.enabled and not w.running and not self._reservas[w.acc.index]:
+                if not self.start_account(w.acc.index, ordem * self.cfg.get("intervalo_inicio_segundos", 3))[0]:
                     break
+                ordem += 1
 
     def stop_account(self, i: int):
         self._log(i, "parando")
-        self._call(self.workers[i].stop)
+        self._comando_conta(i, self.workers[i].stop)
 
     def stop_all(self):
         for w in self.workers:
-            if w.running:
+            if w.running or w.pending_start or w.login_open or self._reservas[w.acc.index]:
                 self.stop_account(w.acc.index)
 
     def restart_account(self, i: int):
-        self._call(self.workers[i].restart)
+        if not self.workers[i].running:
+            return self.start_account(i)
+        self._comando_conta(i, self.workers[i].restart, reservar=True)
+
+    def set_background(self, ativo: bool):
+        self.browser.background = ativo
 
     def pause(self, i: int):
         self._log(i, "automação pausada")
@@ -173,13 +208,14 @@ class Manager:
                 w.rmt.parar("você clicou em Parar todas as compras")
 
     def open_login(self, i: int) -> tuple[bool, str]:
-        w = self.workers[i]
-        if w.login_open:
-            return False, "A página de login desta conta já está aberta."
-        ok, motivo = self.can_connect(i)
-        if not ok:
-            return False, motivo
-        self._call(w.open_login, self.cfg["url"])
+        with self._reserva_lock:
+            w = self.workers[i]
+            if w.login_open or self._reservas[i]:
+                return False, "A página desta conta já está aberta ou iniciando."
+            ok, motivo = self.can_connect(i)
+            if not ok:
+                return False, motivo
+            self._comando_conta(i, w.open_login, self.cfg["url"], reservar=True)
         return True, ""
 
     def shutdown(self):
@@ -188,11 +224,11 @@ class Manager:
         self.browser.shutting_down = True
 
         async def _all():
-            await asyncio.gather(*(w.stop() for w in self.workers), return_exceptions=True)
             pendentes = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
             for t in pendentes:
                 t.cancel()
             await asyncio.gather(*pendentes, return_exceptions=True)
+            await asyncio.gather(*(w.stop() for w in self.workers), return_exceptions=True)
         if not self._thread.is_alive():
             return
         try:
@@ -214,7 +250,7 @@ class Manager:
             out.append({
                 "index": w.acc.index, "name": w.acc.name, "enabled": w.acc.enabled,
                 "sprite": w.acc.sprite, "status": w.status, "detail": w.detail,
-                "mode": w.mode, "running": w.running, "login_open": w.login_open,
+                "mode": w.mode, "running": w.running or bool(self._reservas[w.acc.index]), "login_open": w.login_open,
                 "level": s.level, "nick": s.nick, "xp_gained": s.xp_gained if s.battles else None,
                 "xp_h": s.xp_per_hour, "elapsed": s.elapsed if w.running else 0,
                 "battles": s.battles, "last_battle": s.last_battle, "last_action": w.last_action,
@@ -227,7 +263,17 @@ class Manager:
     def _log(self, i: int | None, msg: str):
         quem = self.accounts[i].name if i is not None else "Sistema"
         line = f"[{datetime.now():%H:%M:%S}] {quem} - {msg}"
-        self.logs.put(line)
+        try:
+            self.logs.put_nowait(line)
+        except queue.Full:
+            try:
+                self.logs.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.logs.put_nowait(line)
+            except queue.Full:
+                pass             # o arquivo em disco continua recebendo todas as linhas
         with self._log_trava:      # a tela e o loop das contas escrevem no log
             try:
                 # Um arquivo por dia, aberto uma vez (e não a cada linha do log).
@@ -255,7 +301,7 @@ class Manager:
                 if w.running and time.monotonic() - w.heartbeat > WATCHDOG_SEGUNDOS:
                     self._log(w.acc.index, "worker travado - reiniciando só esta conta")
                     w.heartbeat = time.monotonic()
-                    asyncio.create_task(w.restart())
+                    self.restart_account(w.acc.index)
             voltas += 1
             # Memória a cada 10 s: reabrir só vale entre uma batalha e outra (FARMING), e numa
             # hunt cheia essa janela é curta — olhar de minuto em minuto quase nunca a pegava.
@@ -290,5 +336,5 @@ class Manager:
             self._log(i, f"página usando {mb:,.0f} MB (limite {limite:,} MB) - reabrindo só esta conta "
                          f"para liberar memória".replace(",", "."))
             w.heartbeat = agora
-            asyncio.create_task(w.restart())
+            self.restart_account(i)
             return                         # uma conta por vez

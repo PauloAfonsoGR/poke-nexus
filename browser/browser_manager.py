@@ -17,6 +17,7 @@ class BrowserManager:
         self.web = web
         self.zoom = zoom
         self.shutting_down = False
+        self.background = False
         self._seq = itertools.count(1)
 
     @staticmethod

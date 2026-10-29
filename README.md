@@ -101,8 +101,36 @@ conta você pode mudar:
 | `hunt`   | Opcional. Deixe `""` para o programa usar o último mapa que a conta caçou |
 | `ativa`  | `true` = pode ser iniciada; `false` = desativada |
 
-Também dá para ligar `iniciar_contas_ao_abrir = true` (inicia todas as contas ativas ao abrir).
+Em instalações novas, `iniciar_contas_ao_abrir = true`: as contas ativas iniciam ao abrir,
+com três segundos entre partidas (`intervalo_inicio_segundos`). Configurações antigas são preservadas;
+ative em **Ajustes → Geral → Iniciar as contas ativas ao abrir o programa**.
 **Nunca** coloque e-mail, senha, token ou cookie no `config.toml`.
+
+### Início automático e bandeja (28/10/2026)
+
+- Faça login uma vez em cada perfil e escolha uma hunt. Depois disso, a sessão salva e a última hunt
+  permitem retomar o farm ao abrir. Uma hunt fixa em Ajustes tem prioridade. Sessão expirada,
+  CAPTCHA, termos novos e criação de personagem ainda precisam da sua ação.
+- Fechar no **X** ou minimizar envia para a bandeja e mantém as contas rodando. No menu do ícone:
+  **Abrir PokeNexus** restaura; **Sair e parar as contas** encerra o programa e as sessões.
+  Sem bandeja disponível, o X encerra normalmente. As opções ficam em Ajustes → Geral.
+- **Abrir o programa na bandeja** é opcional. Não configura a inicialização junto com o Windows.
+- Em segundo plano, a interface atualiza a cada cinco segundos e pausa as animações. Com
+  **Ajustes → Desempenho → Usar a economia do jogo enquanto estiver em segundo plano**, o programa
+  clica no controle de economia nativo. Ao restaurar, devolve a preferência anterior; quem já
+  usava economia continua com ela ligada.
+- Parar tudo também fecha o login reserva e cancela partidas que ainda estavam aguardando.
+- Com **Avançar para a melhor hunt segura**, cada conta sem hunt fixa reaproveita o ranking do
+  Hunt Analyzer. O objetivo pode ser XP do Pokémon, XP do treinador ou Ouro. A reavaliação padrão
+  é a cada 15 minutos; áreas bloqueadas, inviáveis ou acima do risco escolhido são ignoradas e a
+  troca exige pelo menos 5% de ganho. Medições de 10+ minutos corrigem o modelo de cada hunt para
+  este PC e este Pokémon. Uma hunt fixa nunca é substituída por essa automação.
+- O computador precisa continuar ligado, acordado e com internet. Login válido e uma área liberada
+  continuam necessários. Não foi medida uma porcentagem de economia de CPU/RAM em contas reais.
+- O limite simultâneo de quatro contas foi mantido. VM, proxy e troca de identificador não são
+  usados para contornar as regras do servidor.
+
+Validação e detalhes: [relatório](docs/automacao/RELATORIO.md).
 
 ## 3. Como o jogo aparece
 
@@ -207,7 +235,7 @@ Hunt Analyzer com "Caçar aqui", atalhos, Parar tudo. Só a aparência fica mais
 
 Nada disso mexe no ritmo do jogo: as páginas escondidas continuam rodando normalmente. O PokeIdle
 também tem o **Modo Economia** nas configurações do próprio jogo (desliga a cena do mapa); ele economiza
-ainda mais, mas o PokeNexus nunca liga isso sozinho.
+ainda mais e pode ser ativado pelo PokeNexus em segundo plano, conforme a opção em Ajustes.
 
 ## 7. Hunt Analyzer (Hunts)
 

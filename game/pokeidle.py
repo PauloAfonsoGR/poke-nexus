@@ -20,6 +20,7 @@ import time
 
 from browser.cdp import CdpPage
 from game import selectors as S
+from game.economia import JS_ECONOMIA
 
 # Campos do estado tratados à parte: a coleção de pokémon chega em pedaços (pkMud/pkFora) e a
 # Pokédex também (dexMud/dexFora): ela fica só em `self.dex`, para a Pokédex do PokeNexus ler.
@@ -43,6 +44,7 @@ ERROS_DE_CONTA = {
     "auth.contaExcluida": "conta excluída",
     "auth.contaBanida": "conta banida",
     "auth.ipBanido": "rede banida",
+    "auth.provedorBanido": "provedor de rede bloqueado pelo servidor",
     "login.contaBanida": "conta banida",
     "login.ipBanido": "rede banida",
     "login.limiteOnlineIp": "limite de contas conectadas nesta rede",
@@ -50,6 +52,15 @@ ERROS_DE_CONTA = {
     "login.limiteContasIp": "limite de contas criadas nesta rede",
 }
 ERROS_DE_SESSAO = {"auth.sessaoInvalida", "auth.precisaLogin"}
+ERROS_LIMITE_REDE = {"login.limiteOnlineIp", "login.limiteOnlineIpLista", "login.limiteContasIp"}
+
+
+def diagnostico_recusa(chave: str) -> str:
+    texto = ERROS_DE_CONTA.get(chave, chave)
+    if chave in ERROS_LIMITE_REDE:
+        return (f"{texto} ({chave}). Limite do servidor por IP/rede; aumentar o limite local "
+                "não libera vagas. Libere uma sessão ou consulte o suporte sobre liberação da rede.")
+    return texto
 
 
 class GameSession:
@@ -363,6 +374,9 @@ class GameSession:
             pass
 
     # ---------------------------------------------------------------- ações
+    async def economia_segundo_plano(self, ativo: bool):
+        return await self.page.evaluate(JS_ECONOMIA, ativo, timeout=5)
+
     async def click_reload_version(self):
         await self.page.click(S.BTN_RECARREGAR_VERSAO, timeout=5)
 

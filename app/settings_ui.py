@@ -164,7 +164,7 @@ class SettingsDialog(QDialog):
     def _spin(self, sec, k, sufixo="", passo=1):
         _t, mn, mx, _ = CAMPOS[(sec, k)]
         s = QSpinBox()
-        s.setRange(mn, mx)
+        s.setRange(mn, mx if mx is not None else 2_147_483_647)
         s.setSingleStep(passo)
         s.setSuffix(sufixo)
         return s
@@ -220,9 +220,18 @@ class SettingsDialog(QDialog):
         self._linha(g, "Ao abrir", self.w_iniciar, None, "iniciar_contas_ao_abrir")
         self.w_max = self._spin(None, "max_simultaneas", " contas")
         self._linha(g, "Máximo conectadas ao mesmo tempo", self.w_max, None, "max_simultaneas",
-                    "Os Termos do PokeIdle permitem no máximo 4 contas conectadas por rede")
+                    "Limite do programa. O servidor pode recusar contas por IP/rede, independentemente deste valor")
         self.w_qtd = self._spin(None, "quantidade_contas", " contas")
         self._linha(g, "Contas no programa", self.w_qtd, None, "quantidade_contas")
+        self.w_inicio_intervalo = self._spin(None, "intervalo_inicio_segundos", " s")
+        self._linha(g, "Intervalo entre partidas", self.w_inicio_intervalo, None, "intervalo_inicio_segundos")
+        self.w_bandeja = {}
+        for chave, texto in (("fechar_para_bandeja", "Fechar no X mantém as contas na bandeja"),
+                             ("minimizar_para_bandeja", "Minimizar envia para a bandeja"),
+                             ("iniciar_na_bandeja", "Abrir o programa na bandeja")):
+            w = QCheckBox(texto)
+            self.w_bandeja[chave] = w
+            self._linha(g, "", w, "janela", chave)
         self.w_zoom = QDoubleSpinBox()
         self.w_zoom.setRange(0.5, 2.0)
         self.w_zoom.setSingleStep(0.1)
@@ -255,17 +264,34 @@ class SettingsDialog(QDialog):
                 ("janela_derrotas_minutos", "…dentro de", int, " min"),
                 ("log_cada_batalha", "Escrever cada batalha no log", bool, None),
                 ("reabrir_navegador", "Reabrir a sessão sozinho se a página travar", bool, None),
-                ("limite_memoria_pagina_mb", "Reabrir a página acima de", int, " MB")):
+                ("limite_memoria_pagina_mb", "Reabrir a página acima de", int, " MB"),
+                ("avancar_melhor_hunt", "Avançar para a melhor hunt segura", bool, None),
+                ("objetivo_hunt", "Otimizar o farm para", str,
+                 (("XP do Pokémon", "xp_pokemon"), ("XP do treinador", "xp_treinador"), ("Ouro", "ouro"))),
+                ("risco_maximo_hunt", "Risco máximo aceito", str,
+                 (("Baixo", "baixo"), ("Médio", "medio"))),
+                ("usar_medicoes_reais", "Aprender com o ritmo real de cada hunt", bool, None),
+                ("reavaliar_hunt_minutos", "Reavaliar a melhor hunt a cada", int, " min"),
+                ("ganho_minimo_troca_pct", "Trocar somente com ganho mínimo de", int, "%")):
             if tipo is bool:
                 w = QCheckBox(rot)
                 self._linha(g, "", w, "farm", k)
+            elif tipo is str:
+                w = QComboBox()
+                for texto, valor in extra:
+                    w.addItem(texto, valor)
+                self._linha(g, rot, w, "farm", k,
+                            "Define a métrica e o risco usados pelo modo de rendimento máximo")
             else:
                 w = self._spin("farm", k, extra, 100 if k == "limite_memoria_pagina_mb" else 1)
                 if k == "limite_memoria_pagina_mb":
                     w.setSpecialValueText("desligado")
+                dica = ("0 = desligado. Só reabre no farm automático, entre uma batalha e outra"
+                        if k == "limite_memoria_pagina_mb" else
+                        "Usa o ranking do Hunt Analyzer; respeita nível, risco e hunt fixa"
+                        if k in ("avancar_melhor_hunt", "reavaliar_hunt_minutos", "ganho_minimo_troca_pct") else "")
                 self._linha(g, rot, w, "farm", k,
-                            "0 = desligado. Só reabre no farm automático, entre uma batalha e outra"
-                            if k == "limite_memoria_pagina_mb" else "")
+                            dica)
             self.w_farm[k] = w
 
     def _contas(self):
@@ -322,6 +348,9 @@ class SettingsDialog(QDialog):
 
     def _desempenho(self):
         g = self._card("Desempenho", "desempenho")
+        self.w_economia = QCheckBox("Usar a economia do jogo enquanto estiver em segundo plano")
+        self._linha(g, "", self.w_economia, "desempenho", "economia_em_segundo_plano",
+                    "Desliga a cena pelo botão do jogo e restaura ao voltar. As batalhas continuam")
         self.w_leve = QCheckBox("Modo Leve")
         self._linha(g, "", self.w_leve, "desempenho", "modo_leve")
         txt = ("Tudo funciona igual (farm, VER TODAS, controle manual, Hunt Analyzer, atalhos), só a aparência "
@@ -330,7 +359,7 @@ class SettingsDialog(QDialog):
                "de enfeite). Usa a placa de vídeo quando o PC tem uma; sem placa, desenha pelo modo mais "
                "barato para a CPU.\n"
                "Dica: o PokeIdle também tem o Modo Economia nas configurações do jogo (desliga a cena do "
-               "mapa); o PokeNexus não liga isso sozinho.")
+               "mapa); a opção acima pode ativá-lo enquanto a janela estiver escondida.")
         aviso = QLabel("⚠  Para ligar ou desligar o Modo Leve, salve e REINICIE o PokeNexus (feche e abra "
                        "de novo): ele só é aplicado quando o programa abre.")
         aviso.setWordWrap(True)
@@ -372,6 +401,9 @@ class SettingsDialog(QDialog):
             self.w_iniciar.setChecked(bool(cfg["iniciar_contas_ao_abrir"]))
             self.w_max.setValue(int(cfg["max_simultaneas"]))
             self.w_qtd.setValue(int(cfg["quantidade_contas"]))
+            self.w_inicio_intervalo.setValue(int(cfg["intervalo_inicio_segundos"]))
+            for chave, w in self.w_bandeja.items():
+                w.setChecked(bool(cfg["janela"][chave]))
             self.w_zoom.setValue(float(cfg["janela"]["zoom"]))
             i = self.w_layout.findData(cfg["janela"].get("layout_ver_todas", "grade"))
             self.w_layout.setCurrentIndex(max(0, i))
@@ -381,7 +413,12 @@ class SettingsDialog(QDialog):
         if quer("farm"):
             for k, w in self.w_farm.items():
                 v = cfg["farm"][k]
-                w.setChecked(bool(v)) if isinstance(w, QCheckBox) else w.setValue(int(v))
+                if isinstance(w, QCheckBox):
+                    w.setChecked(bool(v))
+                elif isinstance(w, QComboBox):
+                    w.setCurrentIndex(max(0, w.findData(v)))
+                else:
+                    w.setValue(int(v))
         if quer("contas"):
             for wc, a in zip(self.widgets_contas, contas):
                 wc["nome"].setText(a["name"] if isinstance(a, dict) else a.name)
@@ -395,6 +432,7 @@ class SettingsDialog(QDialog):
                 w.setKeySequence(QKeySequence(cfg["atalhos"].get(k, config_edit.ATALHO_PADRAO.get(k, ""))))
         if quer("desempenho"):
             self.w_leve.setChecked(bool(cfg["desempenho"]["modo_leve"]))
+            self.w_economia.setChecked(bool(cfg["desempenho"]["economia_em_segundo_plano"]))
         if quer("atualizacao"):
             self.w_avisar.setChecked(bool(cfg.get("atualizacao", DEFAULTS["atualizacao"])["avisar"]))
 
@@ -402,7 +440,7 @@ class SettingsDialog(QDialog):
         if not perguntar(self, "Restaurar padrão", f"Voltar \"{titulo}\" para os valores "
                          f"padrão? (só grava ao clicar em Salvar)"):
             return
-        padrao = [{"name": f"Conta {i + 1}", "sprite": DEFAULT_SPRITES[i], "hunt": "", "enabled": True}
+        padrao = [{"name": f"Conta {i + 1}", "sprite": DEFAULT_SPRITES[i % len(DEFAULT_SPRITES)], "hunt": "", "enabled": True}
                   for i in range(len(self.accounts))]
         self._carregar(DEFAULTS, padrao, {secao})
 
@@ -410,15 +448,25 @@ class SettingsDialog(QDialog):
         v = {(None, "iniciar_contas_ao_abrir"): self.w_iniciar.isChecked(),
              (None, "max_simultaneas"): self.w_max.value(),
              (None, "quantidade_contas"): self.w_qtd.value(),
+             (None, "intervalo_inicio_segundos"): self.w_inicio_intervalo.value(),
              ("janela", "zoom"): round(self.w_zoom.value(), 2),
              ("janela", "layout_ver_todas"): self.w_layout.currentData()}
         for k, w in self.w_int.items():
             v[("intervalos", k)] = w.value()
         for k, w in self.w_farm.items():
-            v[("farm", k)] = w.isChecked() if isinstance(w, QCheckBox) else w.value()
+            if isinstance(w, QCheckBox):
+                valor = w.isChecked()
+            elif isinstance(w, QComboBox):
+                valor = w.currentData()
+            else:
+                valor = w.value()
+            v[("farm", k)] = valor
         for k, w in self.w_atalhos.items():
             v[("atalhos", k)] = w.keySequence().toString(QKeySequence.PortableText)
         v[("desempenho", "modo_leve")] = self.w_leve.isChecked()
+        v[("desempenho", "economia_em_segundo_plano")] = self.w_economia.isChecked()
+        for chave, w in self.w_bandeja.items():
+            v[("janela", chave)] = w.isChecked()
         v[("atualizacao", "avisar")] = self.w_avisar.isChecked()
         contas = [{"nome": wc["nome"].text().strip(), "sprite": wc["sprite"].value(),
                    "hunt": wc["hunt"].text().strip(), "ativa": wc["ativa"].isChecked()}
@@ -456,6 +504,7 @@ class SettingsDialog(QDialog):
         rod = self.cfg_rodando
         depois = [rot for (sec, k), rot in (((None, "iniciar_contas_ao_abrir"), "iniciar ao abrir"),
                                             ((None, "quantidade_contas"), "contas no programa"),
+                                            (("janela", "iniciar_na_bandeja"), "abrir na bandeja"),
                                             (("janela", "zoom"), "zoom inicial"),
                                             (("desempenho", "modo_leve"), "Modo Leve"))
                   if (sec, k) in valores and valores[(sec, k)] != (rod.get(k) if sec is None else rod[sec].get(k))]

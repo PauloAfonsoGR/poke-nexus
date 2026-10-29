@@ -9,7 +9,7 @@ from app.config import Account
 from browser.browser_manager import BrowserManager
 from browser.cdp import CdpPage
 from game.pokeidle import GameSession
-from hunts.analyzer import HuntAnalyzer
+from hunts.analyzer import HuntAnalyzer, recomendar_hunt_automatica
 from rmt.rotina import RmtRotina
 from workers.farm_worker import (AGUARDANDO, ERRO, INICIANDO, OFFLINE, FarmRoutine, _curto)
 
@@ -69,6 +69,7 @@ class AccountWorker:
         self.identidade = {k: estado.get(k) for k in ("nick", "id")}
         # Hunt Analyzer e medição real DESTA conta (nada é compartilhado com as outras).
         self.hunts = HuntAnalyzer(account.profile_dir, hunt_data)
+        self._melhor_hunt_em = time.monotonic() + 60
         # RMT (Mercado da Comunidade) DESTA conta: regras, limites e extrato no perfil dela.
         self.rmt = RmtRotina(self, hunt_data, proprios)
 
@@ -107,16 +108,19 @@ class AccountWorker:
             return {}
 
     # ------------------------------------------------------------- comandos
-    def start(self):
+    def start(self, atraso: float = 0):
         self.pending_start = False
         if self.running:
             return
         self.login_open = False         # a sessão monitorada substitui a página de login
         self.mode = "auto"
         self.stats = Stats(started_at=time.monotonic())
-        self.task = asyncio.create_task(self._run(), name=f"worker_{self.acc.folder}")
+        self.set_status(INICIANDO, f"início agendado em {atraso:g}s" if atraso else "abrindo a sessão")
+        self.heartbeat = time.monotonic() + atraso
+        self.task = asyncio.create_task(self._run(atraso), name=f"worker_{self.acc.folder}")
 
     async def stop(self):
+        self.pending_start = False
         if self.task:
             self.task.cancel()
             try:
@@ -159,7 +163,9 @@ class AccountWorker:
         self.log("página de login sem automação aberta")
 
     # ------------------------------------------------------------ execução
-    async def _run(self):
+    async def _run(self, atraso: float = 0):
+        if atraso:
+            await asyncio.sleep(atraso)
         backoff = 5
         while True:
             inicio = time.monotonic()
@@ -198,12 +204,23 @@ class AccountWorker:
         self.set_status(INICIANDO, "abrindo o PokeIdle")
         await self.page.goto(self.cfg["url"])
         self.log("sessão aberta")
+        economia_em = 0.0
         while True:
             if fechou.is_set() or self.page.is_closed():
                 raise BrowserClosed("a página da conta foi fechada ou travou")
             self.heartbeat = time.monotonic()
+            inicio_passo = time.monotonic()
             try:
+                if self.game.welcomed and time.monotonic() >= economia_em:
+                    economia_em = time.monotonic() + 5
+                    try:
+                        await self.game.economia_segundo_plano(
+                            self.browser.background and
+                            self.cfg.get("desempenho", {}).get("economia_em_segundo_plano", True))
+                    except Exception:
+                        pass  # uma mudança visual do jogo não pode interromper o farm
                 await self.farm.step()
+                await self._avaliar_melhor_hunt()
             except Exception as e:
                 if fechou.is_set() or self.page.is_closed():
                     raise BrowserClosed("a página da conta foi fechada ou travou")
@@ -222,7 +239,38 @@ class AccountWorker:
             # nada aqui mexe na tela do jogo nem espera resposta.
             await self.rmt.tick()
             # lido a cada volta: mudar nas Configurações vale na hora
-            await self.game.wait_change(self.cfg["intervalos"]["verificacao_segundos"])
+            # Estado e estatísticas continuam chegando pelo socket. Um evento de batalha não
+            # deve disparar outra leitura do DOM antes do intervalo configurado.
+            intervalo = max(1, self.cfg["intervalos"]["verificacao_segundos"])
+            await asyncio.sleep(max(0, intervalo - (time.monotonic() - inicio_passo)))
+
+    async def _avaliar_melhor_hunt(self):
+        """Reavalia com pouca frequência e nunca sobrepõe uma hunt fixada pela pessoa."""
+        farm_cfg = self.cfg.get("farm", {})
+        agora = time.monotonic()
+        if (not farm_cfg.get("avancar_melhor_hunt", True) or self.acc.hunt or self.mode != "auto"
+                or not self.game or not self.game.welcomed or not self.game.hunt_slug
+                or self.game.in_battle or agora < self._melhor_hunt_em):
+            return
+        minutos = max(5, int(farm_cfg.get("reavaliar_hunt_minutos", 15)))
+        self._melhor_hunt_em = agora + minutos * 60
+        await self.hunts.refresh(self.game)
+        escolha = recomendar_hunt_automatica(
+            self.hunts.result, self.game.hunt_slug,
+            farm_cfg.get("ganho_minimo_troca_pct", 5),
+            farm_cfg.get("objetivo_hunt", "xp_pokemon"),
+            farm_cfg.get("risco_maximo_hunt", "medio"),
+            farm_cfg.get("usar_medicoes_reais", True))
+        if not escolha:
+            return
+        ganho = escolha.get("_otimizador_ganho_pct")
+        metrica = {"xp_pokemon": "XP do Pokémon/h", "xp_treinador": "XP do treinador/h",
+                   "ouro": "ouro/h"}.get(escolha.get("_otimizador_objetivo"), "rendimento")
+        fonte = "medição real + modelo" if escolha.get("_otimizador_medido") else "modelo"
+        extra = f" (+{round(ganho)}% de {metrica}, {fonte})" if ganho is not None else f" ({fonte})"
+        nome = self.game.hunt_name(escolha["slug"])
+        self.log(f"melhor hunt segura: mudando para {nome}{extra}")
+        await self.farm.go_hunt(escolha["slug"])
 
     def _on_campo(self, tipo: str, m: dict):
         if tipo == "campo.init":

@@ -14,6 +14,12 @@ from hunts.measure import HuntMeasure, chave_do_pokemon
 
 ORDENS = ("xp", "ouro", "kills", "risco")
 PREFS_PADRAO = {"ordem": "xp", "so_liberadas": True, "com_pocao": True}
+METRICAS_AUTOMATICAS = {
+    "xp_pokemon": ("xp_pokemon_h", "XP do Pokémon/h"),
+    "xp_treinador": ("xp_treinador_h", "XP do treinador/h"),
+    "ouro": ("ouro_h", "ouro/h"),
+}
+ORDEM_RISCO = {"baixo": 0, "medio": 1, "alto": 2}
 
 
 def nivel_de_risco(l: dict) -> tuple[str, str]:
@@ -40,6 +46,57 @@ def _chave_ordem(ordem):
         # menos arriscada primeiro; empate → mais XP
         return lambda l: (l["inviavel"], l["um_hit"], l["mortes_h"], round(l["hit_pct"], 3), -l["xp_pokemon_h"])
     return lambda l: (-l["xp_pokemon_h"], l["nivel"])
+
+
+def _valor_automatico(linha: dict, objetivo: str, usar_medicoes_reais: bool) -> tuple[float, bool]:
+    chave = METRICAS_AUTOMATICAS.get(objetivo, METRICAS_AUTOMATICAS["xp_pokemon"])[0]
+    valor = float(linha.get(chave) or 0)
+    medido = float(linha.get("kph_medido") or 0)
+    modelo = float(linha.get("kph_modelo") or linha.get("kph") or 0)
+    if usar_medicoes_reais and medido > 0 and modelo > 0:
+        # A medição tem no mínimo 10 minutos. O teto evita que uma amostra antiga ou um evento
+        # excepcional domine para sempre; ela corrige o modelo, não substitui todas as fórmulas.
+        valor *= max(0.5, min(1.5, medido / modelo))
+        return valor, True
+    return valor, False
+
+
+def recomendar_hunt_automatica(resultado: dict | None, atual_slug: str | None,
+                               ganho_minimo_pct: float = 10, objetivo: str = "xp_pokemon",
+                               risco_maximo: str = "medio", usar_medicoes_reais: bool = True) -> dict | None:
+    """Escolhe uma melhora conservadora para o farm automático.
+
+    Só considera áreas liberadas, viáveis e dentro do risco configurado. Uma hunt atual segura
+    só é trocada quando a métrica escolhida melhora pelo percentual configurado; isso evita
+    ficar saltando entre áreas por pequenas oscilações da medição.
+    """
+    if not resultado:
+        return None
+    objetivo = objetivo if objetivo in METRICAS_AUTOMATICAS else "xp_pokemon"
+    risco_maximo = risco_maximo if risco_maximo in ("baixo", "medio") else "medio"
+    limite_risco = ORDEM_RISCO[risco_maximo]
+    candidatas = [l for l in resultado.get("todas", [])
+                  if l.get("liberada") and not l.get("inviavel")
+                  and ORDEM_RISCO[nivel_de_risco(l)[0]] <= limite_risco
+                  and _valor_automatico(l, objetivo, usar_medicoes_reais)[0] > 0]
+    if not candidatas:
+        return None
+    melhor = max(candidatas, key=lambda l: (_valor_automatico(l, objetivo, usar_medicoes_reais)[0],
+                                            -int(l.get("nivel") or 0)))
+    if melhor.get("slug") == atual_slug:
+        return None
+    atual = next((l for l in resultado.get("todas", []) if l.get("slug") == atual_slug), None)
+    melhor_valor, melhor_medido = _valor_automatico(melhor, objetivo, usar_medicoes_reais)
+    atual_valor = 0.0
+    if (atual and not atual.get("inviavel")
+            and ORDEM_RISCO[nivel_de_risco(atual)[0]] <= limite_risco):
+        atual_valor, _ = _valor_automatico(atual, objetivo, usar_medicoes_reais)
+        minimo = atual_valor * (1 + max(0, float(ganho_minimo_pct)) / 100)
+        if atual_valor > 0 and melhor_valor < minimo:
+            return None
+    ganho = (melhor_valor / atual_valor - 1) * 100 if atual_valor > 0 else None
+    return {**melhor, "_otimizador_valor": melhor_valor, "_otimizador_objetivo": objetivo,
+            "_otimizador_medido": melhor_medido, "_otimizador_ganho_pct": ganho}
 
 
 class HuntAnalyzer:

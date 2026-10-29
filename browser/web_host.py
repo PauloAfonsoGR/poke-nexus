@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebEngineCore import (QWebEngineGlobalSettings, QWebEnginePage, QWebEngineProfile,
                                      QWebEngineProfileBuilder)
+from shiboken6 import isValid
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # Só desempenho: páginas escondidas (contas não selecionadas) continuam rodando normalmente.
@@ -206,14 +207,14 @@ class WebHost(QObject):
 
     def _do_close_data(self, fut):
         if self._data_page is not None:
-            self._data_page.deleteLater()
+            self._delete_later(self._data_page)
             self._data_page = None
         fut.set_result(True)
 
     def _do_open_data(self, marker_url, fut):
         try:
             if self._data_page is not None:
-                self._data_page.deleteLater()
+                self._delete_later(self._data_page)
             if self._data_profile is None:
                 self._data_profile = QWebEngineProfile(self)      # sem nome = anônimo, em memória
             self._data_page = GamePage(self._data_profile, self)
@@ -262,9 +263,13 @@ class WebHost(QObject):
         if item:
             page, view = item
             self.view_removed.emit(index)
-            view.setParent(None)
-            view.deleteLater()
-            page.deleteLater()
+            try:
+                if isValid(view):
+                    view.setParent(None)
+            except RuntimeError:
+                pass
+            self._delete_later(view)
+            self._delete_later(page)
         if fut:
             fut.set_result(True)
 
@@ -273,9 +278,18 @@ class WebHost(QObject):
         for i in list(self._items):
             self._do_close(i, None)
         if self._data_page is not None:
-            self._data_page.deleteLater()
+            self._delete_later(self._data_page)
             self._data_page = None
         for p in [*self._profiles.values(), *([self._data_profile] if self._data_profile else [])]:
-            p.deleteLater()
+            self._delete_later(p)
         self._profiles.clear()
         self._data_profile = None
+
+    @staticmethod
+    def _delete_later(obj):
+        """Qt pode já ter destruído o wrapper C++ durante o fechamento do WebEngine."""
+        try:
+            if obj is not None and isValid(obj):
+                obj.deleteLater()
+        except RuntimeError:
+            pass

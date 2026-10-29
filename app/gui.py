@@ -6,6 +6,7 @@ Trocar de conta só troca qual página está à vista - nada recarrega.
 """
 import collections
 import html
+import queue
 import re
 import time
 
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QChe
                                QWidget)
 
 from app import config_edit
+from app.bandeja import Bandeja
 from app.config import APP_NAME, APP_VERSION, ASSETS_DIR, CONFIG_PATH, LIMITE_TERMOS, MODO_LEVE
 from app.settings_ui import SettingsDialog
 from app.hunt_ui import HuntPanel
@@ -213,7 +215,7 @@ class AllTab(Moldura):
         key.setObjectName("atalho")
         top.addWidget(key)
         col.addLayout(top)
-        sub = QLabel("ver as 4 juntas")
+        sub = QLabel("ver todas juntas")
         sub.setObjectName("muted")
         sub.setStyleSheet("font-size:11px;")
         col.addWidget(sub)
@@ -955,10 +957,15 @@ class MainWindow(QMainWindow):
         self.m = manager
         self.web = web
         self.cfg = manager.cfg
+        self._encerrando = False
+        self._segundo_plano = False
         self.selected = 0
         self.grid_mode = False
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(ASSETS_DIR / "pokenexus.ico")))
+        self.bandeja = Bandeja(self)
+        self.bandeja.abrir.connect(self.restaurar)
+        self.bandeja.sair.connect(self.encerrar)
         self.resize(1600, 1000)
         self.setMinimumSize(760, 600)
         carregar_fontes()
@@ -1060,7 +1067,9 @@ class MainWindow(QMainWindow):
         self.timer.start(1000 if MODO_LEVE else 500)
         self.refresh()
         if self.cfg["iniciar_contas_ao_abrir"]:
-            QTimer.singleShot(800, self.m.start_all)
+            QTimer.singleShot(800, lambda: self.m.start_all() if not self._encerrando else None)
+        if self.cfg["janela"].get("iniciar_na_bandeja"):
+            QTimer.singleShot(0, self.enviar_bandeja)
 
     def _trocar_layout_todas(self, layout: str, salvar: bool = True):
         """Grade ou celulares no VER TODAS: só muda o tamanho dos quadros e o zoom (nada recarrega)."""
@@ -1113,7 +1122,7 @@ class MainWindow(QMainWindow):
         a = self.cfg["atalhos"]
         n = len(self.tabs)
         linhas = [
-            f"Ctrl+1 a Ctrl+{n}: abrir uma conta" if n > 1 else "Ctrl+1: abrir a conta",
+            "Contas: use os botões no topo; os atalhos configurados aparecem nas dicas",
             f"{a.get('ver_todas', 'Ctrl+0')}: todas as contas",
             f"{a.get('hunts', 'Ctrl+H')}: jogo ou Hunts",
             f"{a.get('rmt', 'Ctrl+M')}: jogo ou Mercado",
@@ -1123,7 +1132,9 @@ class MainWindow(QMainWindow):
             f"{a.get('configuracoes', 'Ctrl+,')}: ajustes",
             "",
             "A automação é permitida pelos Termos do PokeIdle, com no máximo "
-            f"{LIMITE_TERMOS} contas conectadas por rede e por aparelho.",
+            f"{LIMITE_TERMOS} contas por pessoa. O servidor também limita rede e aparelho.",
+            "O limite local em Ajustes não altera o limite do servidor.",
+            "Na bandeja: Abrir PokeNexus ou Sair e parar as contas.",
             "Os atalhos mudam em Ajustes.",
             "",
             "Erro de conexão só no PokeNexus?",
@@ -1156,13 +1167,16 @@ class MainWindow(QMainWindow):
         """Aplica na hora o que pode valer na hora (o resto vale na próxima abertura)."""
         for (sec, k), v in valores.items():
             if sec is None:
-                if k == "max_simultaneas":
+                if k in ("max_simultaneas", "intervalo_inicio_segundos"):
                     self.cfg[k] = v
             elif sec in ("intervalos", "farm", "atalhos", "atualizacao"):
                 self.cfg[sec][k] = v          # os workers leem estes dicionários a cada uso
             elif (sec, k) == ("janela", "layout_ver_todas"):
                 self.cfg["janela"][k] = v
                 self._trocar_layout_todas(v, salvar=False)
+            elif (sec, k) in (("janela", "fechar_para_bandeja"), ("janela", "minimizar_para_bandeja"),
+                              ("desempenho", "economia_em_segundo_plano")):
+                self.cfg[sec][k] = v
         for acc, c in zip(self.m.accounts, contas):
             acc.name, acc.sprite, acc.hunt, acc.enabled = c["nome"].strip(), c["sprite"], c["hunt"], c["ativa"]
         snap = self.m.snapshot()
@@ -1190,7 +1204,7 @@ class MainWindow(QMainWindow):
         col.setSpacing(0)
         b = QLabel("PokeNexus")
         b.setObjectName("brand")
-        s = QLabel("base do treinador, 4 contas")
+        s = QLabel(f"base do treinador, {len(self.m.accounts)} contas")
         s.setObjectName("brandSub")
         col.addWidget(b)
         col.addWidget(s)
@@ -1436,6 +1450,11 @@ class MainWindow(QMainWindow):
 
     # ----------------------------------------------------------- atualização
     def refresh(self):
+        if self._segundo_plano:
+            self._drain_logs(render=False)
+            self.pokedex.observar()
+            self.bandeja.atualizar(self.m.connected_count(), len(self.m.accounts))
+            return
         snap = self.m.snapshot()
         for t, s in zip(self.tabs, snap):
             t.update_info(s)
@@ -1502,7 +1521,7 @@ class MainWindow(QMainWindow):
         largos = [h.itemAt(k).widget() for k in range(h.count()) if h.itemAt(k).widget()]
         outros = sum(x.sizeHint().width() for x in largos if x not in (self.counter, self.b_pokedex))
         fm = self.counter.fontMetrics()
-        cont = fm.horizontalAdvance("4/4 jogando") + 28
+        cont = fm.horizontalAdvance(f"{len(self.m.accounts)}/{self.cfg['max_simultaneas']} jogando") + 28
         dex = self.b_pokedex.fontMetrics().horizontalAdvance(" Pokédex") + 50
         lugar = w - 32 - (0 if w < 820 else self._marca.sizeHint().width() + self.header.spacing())
         curto = outros + cont + dex + h.spacing() * (len(largos) - 1) > lugar
@@ -1525,18 +1544,21 @@ class MainWindow(QMainWindow):
         self.counter.setText(f"{jogando}/{lim}" if self._topo_curto else f"{jogando}/{lim} jogando")
         dica = (f"Jogando agora: {jogando}\nIniciadas: {iniciadas}\nCom erro: {com_erro}\n"
                 + (f"Esperando o login: {login}\n" if login else "")
-                + f"Limite dos Termos do PokeIdle: {LIMITE_TERMOS} contas conectadas")
+                + f"Limite local: {lim} sessões. Padrão do serviço: {LIMITE_TERMOS} por pessoa/rede")
         if self.counter.toolTip() != dica:
             self.counter.setToolTip(dica)
         cor = f"color:{T['erro'] if com_erro else T['aviso'] if iniciadas >= lim else T['destaque']};"
         if self.counter.styleSheet() != cor:      # setStyleSheet refaz o estilo mesmo sem mudar nada
             self.counter.setStyleSheet(cor)
 
-    def _drain_logs(self):
-        while not self.m.logs.empty():
-            line = self.m.logs.get_nowait()
+    def _drain_logs(self, render=True):
+        while True:
+            try:
+                line = self.m.logs.get_nowait()
+            except queue.Empty:
+                break
             self._log_lines.append(line)
-            if self._passes(line):
+            if render and self._passes(line):
                 self.log.appendHtml(self._fmt(line))
 
     def _passes(self, line: str) -> bool:
@@ -1573,13 +1595,58 @@ class MainWindow(QMainWindow):
                 f'{who}</span> <span style="color:{color}">- {msg}</span>')
 
     def changeEvent(self, e):
-        # Minimizada, ninguém vê as sprites nem os selos piscando: param até a janela voltar.
         if e.type() == QEvent.WindowStateChange:
-            PixelSprite.pausar_todas(bool(self.windowState() & Qt.WindowMinimized))
+            if self.isMinimized() and self.cfg["janela"].get("minimizar_para_bandeja", True):
+                QTimer.singleShot(0, lambda: self.enviar_bandeja() if self.isMinimized() else None)
+            self._sincronizar_segundo_plano()
         super().changeEvent(e)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._sincronizar_segundo_plano()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._sincronizar_segundo_plano()
+
+    def _sincronizar_segundo_plano(self):
+        if not hasattr(self, "timer") or self._encerrando:
+            return
+        ativo = not self.isVisible() or self.isMinimized()
+        self._segundo_plano = ativo
+        PixelSprite.pausar_todas(ativo)
+        self.m.set_background(ativo)
+        self.timer.setInterval(5000 if ativo else (1000 if MODO_LEVE else 500))
+        if not ativo:
+            self._rerender_log()
+            self.refresh()
+
+    def enviar_bandeja(self):
+        if not self._encerrando and self.bandeja.disponivel:
+            self.bandeja.icone.show()
+            self.hide()
+
+    def restaurar(self):
+        if self._encerrando:
+            return
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def encerrar(self):
+        self._encerrando = True
+        self.close()
+        QApplication.instance().quit()
+
     def closeEvent(self, e):
+        if (not self._encerrando and self.cfg["janela"].get("fechar_para_bandeja", True)
+                and self.bandeja.disponivel):
+            e.ignore()
+            self.enviar_bandeja()
+            return
+        self._encerrando = True
         self.timer.stop()
+        self.bandeja.fechar()
         self.setEnabled(False)
         self.m.shutdown()
         self.web.close_all()

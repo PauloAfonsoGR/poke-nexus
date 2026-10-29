@@ -8,15 +8,16 @@
 url = "https://pokeidle.io/app"
 
 # Quantas contas aparecem no programa (1 a 4).
-# Os Termos do PokeIdle (seção 5) permitem no máximo 4 contas conectadas
-# por rede e no máximo 4 contas por aparelho.
+# A expansão de contas ficou para outra etapa; o limite atual continua valendo.
 quantidade_contas = 4
 
-# Quantas contas podem ficar conectadas AO MESMO TEMPO (no máximo 4).
+# Limite local de sessões simultâneas (1 a 4).
 max_simultaneas = 4
 
 # true = ao abrir o programa, já inicia todas as contas ativas.
-iniciar_contas_ao_abrir = false
+iniciar_contas_ao_abrir = true
+# Espaça as partidas para evitar pico de CPU/rede. Parar tudo cancela as partidas pendentes.
+intervalo_inicio_segundos = 3
 
 [intervalos]
 # De quanto em quanto tempo cada conta confere o estado do jogo (segundos).
@@ -44,8 +45,19 @@ reabrir_navegador = true
 # reaberta sozinha entre uma batalha e outra (libera a memória que o jogo vai acumulando).
 # 0 = desligado.
 limite_memoria_pagina_mb = 2000
+# true = quando a conta não tem uma hunt fixa, reavalia as hunts liberadas e muda apenas se houver
+# uma opção viável, dentro do risco escolhido e com ganho suficiente no objetivo configurado.
+avancar_melhor_hunt = true
+objetivo_hunt = "xp_pokemon" # xp_pokemon | xp_treinador | ouro
+risco_maximo_hunt = "medio" # baixo | medio
+usar_medicoes_reais = true
+reavaliar_hunt_minutos = 15
+ganho_minimo_troca_pct = 5
 
 [janela]
+fechar_para_bandeja = true
+minimizar_para_bandeja = true
+iniciar_na_bandeja = false
 # Zoom inicial do jogo dentro do programa (1.0 = 100%, 0.8 = 80%).
 # Também dá para mudar na hora pelos botões - e + em cima do jogo.
 zoom = 1.0
@@ -61,6 +73,7 @@ painel_conta = true
 guia_mercado_visto = false
 
 [desempenho]
+economia_em_segundo_plano = true
 # true = Modo Leve: tudo funciona igual, mas sem animações (sprites paradas, selos sem piscar,
 # fundo liso) e "reduzir movimento" no jogo. Usa a placa de vídeo se o PC tiver; sem placa, desenha
 # pelo modo mais barato para a CPU.

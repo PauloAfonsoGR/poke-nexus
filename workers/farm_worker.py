@@ -13,7 +13,7 @@ import asyncio
 import time
 
 from game import selectors as S
-from game.pokeidle import ERROS_DE_CONTA, ERROS_DE_SESSAO
+from game.pokeidle import ERROS_DE_SESSAO, diagnostico_recusa
 
 OFFLINE = "OFFLINE"
 INICIANDO = "INICIANDO"
@@ -53,7 +53,7 @@ class FarmRoutine:
         return len([t for t in self.defeats if now - t < janela]) >= self.cfg_farm["max_derrotas"]
 
     def target_hunt(self) -> str | None:
-        return self.w.acc.hunt or self.w.last_hunt
+        return self.w.acc.hunt or self.w.last_hunt or self.g.hunt_slug
 
     async def reload(self, motivo: str):
         now = time.monotonic()
@@ -86,6 +86,7 @@ class FarmRoutine:
             ok = False
             self.w.log(f"erro ao entrar na hunt: {_curto(e)}")
         if ok:
+            self.w.remember_hunt(slug)
             self.w.log(f"farm iniciado em {nome}")
             self.g.last_battle_event_at = time.monotonic()
             self.center_since = None
@@ -96,7 +97,6 @@ class FarmRoutine:
     # ------------------------------------------------------------- passo
     async def step(self):
         w, g = self.w, self.g
-        tela = await g.read_screen()
 
         if w.mode == "manual":
             w.set_status(MANUAL, "você está no controle")
@@ -104,6 +104,8 @@ class FarmRoutine:
         if w.mode == "pausado":
             w.set_status(PAUSADO, "automação pausada")
             return
+
+        tela = await g.read_screen()
 
         if w.recheck:
             # Voltando do manual/pausa: não confia no que via antes.
@@ -116,6 +118,9 @@ class FarmRoutine:
             tela = await g.read_screen()
 
         # ---- telas que exigem uma pessoa
+        if g.error_key and g.error_key not in ERROS_DE_SESSAO:
+            w.set_status(ERRO, f"servidor recusou: {diagnostico_recusa(g.error_key)}")
+            return
         if tela[S.TELA_LOGIN] or g.error_key in ERROS_DE_SESSAO:
             w.set_status(SESSAO_EXPIRADA, "faça login: botão 'Login' do programa")
             return
@@ -124,9 +129,6 @@ class FarmRoutine:
             return
         if tela[S.ALERTA_CONTA]:
             w.set_status(ERRO, tela.get("alerta_texto") or "aviso da conta no jogo")
-            return
-        if g.error_key:
-            w.set_status(ERRO, f"servidor recusou: {ERROS_DE_CONTA.get(g.error_key, g.error_key)}")
             return
         for tela_id, pedido in S.TELAS_MANUAIS.items():
             if tela.get(tela_id):

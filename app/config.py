@@ -37,7 +37,7 @@ CONFIG_PATH = DATA_DIR / "config.toml"
 PROFILES_DIR = DATA_DIR / "profiles"
 LOGS_DIR = DATA_DIR / "logs"
 
-# Termos do PokeIdle, seção 5: no máximo 4 contas conectadas por rede e 4 por aparelho.
+# Limite atual mantido; expansão de contas ficou para uma próxima etapa.
 LIMITE_TERMOS = 4
 MAX_CONTAS = 4
 
@@ -45,7 +45,8 @@ DEFAULTS = {
     "url": "https://pokeidle.io/app",
     "quantidade_contas": 4,
     "max_simultaneas": 4,
-    "iniciar_contas_ao_abrir": False,
+    "iniciar_contas_ao_abrir": True,
+    "intervalo_inicio_segundos": 3,
     "intervalos": {
         "verificacao_segundos": 3,
         "sem_resposta_recarregar_segundos": 60,
@@ -59,9 +60,16 @@ DEFAULTS = {
         "log_cada_batalha": True,
         "reabrir_navegador": True,
         "limite_memoria_pagina_mb": 2000,
+        "avancar_melhor_hunt": True,
+        "objetivo_hunt": "xp_pokemon",
+        "risco_maximo_hunt": "medio",
+        "usar_medicoes_reais": True,
+        "reavaliar_hunt_minutos": 15,
+        "ganho_minimo_troca_pct": 5,
     },
-    "janela": {"zoom": 1.0, "layout_ver_todas": "grade", "painel_conta": True, "guia_mercado_visto": False},
-    "desempenho": {"modo_leve": False},
+    "janela": {"zoom": 1.0, "layout_ver_todas": "grade", "painel_conta": True, "guia_mercado_visto": False,
+               "fechar_para_bandeja": True, "minimizar_para_bandeja": True, "iniciar_na_bandeja": False},
+    "desempenho": {"modo_leve": False, "economia_em_segundo_plano": True},
     "atualizacao": {"avisar": True, "versao_pulada": ""},
     "atalhos": {
         "conta_1": "Ctrl+1", "conta_2": "Ctrl+2", "conta_3": "Ctrl+3",
@@ -87,7 +95,7 @@ DEFAULT_SPRITES = [25, 1, 4, 258]
 
 @dataclass
 class Account:
-    index: int          # 0..3
+    index: int          # posição na lista, começando em zero
     name: str
     folder: str
     sprite: int
@@ -137,28 +145,44 @@ def _migrar_config():
     padrão velho. Hoje: o mascote da Conta 4 era o Squirtle (7) e passou a ser o Mudkip (258). Quem
     escolher o Squirtle depois disso continua com ele."""
     feitas = set(MIGRACOES.read_text(encoding="utf-8").split()) if MIGRACOES.exists() else set()
-    if "mascote_conta4" in feitas:
-        return
-    try:
-        texto = CONFIG_PATH.read_text(encoding="utf-8-sig")
-        contas = tomllib.loads(texto).get("contas") or []
-        if len(contas) >= 4 and int(contas[3].get("sprite") or 0) == 7:
+    novas = set()
+    if "mascote_conta4" not in feitas:
+        try:
+            texto = CONFIG_PATH.read_text(encoding="utf-8-sig")
+            contas = tomllib.loads(texto).get("contas") or []
+            if len(contas) >= 4 and int(contas[3].get("sprite") or 0) == 7:
+                from app.config_edit import aplicar_no_texto
+                novo = aplicar_no_texto(texto, {}, [{}, {}, {}, {"sprite": DEFAULT_SPRITES[3]}])
+                if (tomllib.loads(novo).get("contas") or [{}] * 4)[3].get("sprite") == DEFAULT_SPRITES[3]:
+                    tmp = CONFIG_PATH.with_suffix(".toml.tmp")
+                    tmp.write_text(novo, encoding="utf-8")
+                    tmp.replace(CONFIG_PATH)
+            novas.add("mascote_conta4")
+        except (OSError, ValueError, tomllib.TOMLDecodeError):
+            return                   # config com erro: o load_config avisa; tenta de novo na próxima
+    # Migração explícita pedida em 28/10/2026: instalações antigas também passam a iniciar as contas.
+    # A pessoa ainda pode desligar depois em Ajustes; a marca impede sobrescrever essa escolha.
+    if "inicio_automatico_20261028" not in feitas:
+        try:
             from app.config_edit import aplicar_no_texto
-            novo = aplicar_no_texto(texto, {}, [{}, {}, {}, {"sprite": DEFAULT_SPRITES[3]}])
-            if (tomllib.loads(novo).get("contas") or [{}] * 4)[3].get("sprite") == DEFAULT_SPRITES[3]:
-                tmp = CONFIG_PATH.with_suffix(".toml.tmp")
-                tmp.write_text(novo, encoding="utf-8")
-                tmp.replace(CONFIG_PATH)
-    except (OSError, ValueError, tomllib.TOMLDecodeError):
-        return                       # config com erro: o load_config avisa; tenta de novo na próxima
+            texto = CONFIG_PATH.read_text(encoding="utf-8-sig")
+            novo = aplicar_no_texto(texto, {None: {"iniciar_contas_ao_abrir": True,
+                                                   "intervalo_inicio_segundos": 3}}, [])
+            tomllib.loads(novo)
+            tmp = CONFIG_PATH.with_suffix(".toml.tmp")
+            tmp.write_text(novo, encoding="utf-8")
+            tmp.replace(CONFIG_PATH)
+            novas.add("inicio_automatico_20261028")
+        except (OSError, ValueError, tomllib.TOMLDecodeError):
+            return
     try:
-        MIGRACOES.write_text("\n".join(sorted(feitas | {"mascote_conta4"})) + "\n", encoding="utf-8")
+        MIGRACOES.write_text("\n".join(sorted(feitas | novas)) + "\n", encoding="utf-8")
     except OSError:
         pass
 
 
 def _merge(base: dict, extra: dict) -> dict:
-    out = dict(base)
+    out = {k: _merge(v, {}) if isinstance(v, dict) else v for k, v in base.items()}
     for k, v in extra.items():
         out[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
     return out
@@ -170,9 +194,13 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[dict, list[Account]]:
         # utf-8-sig: aceita o arquivo salvo como "UTF-8 com BOM" (opção do Bloco de Notas).
         raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     cfg = _merge(DEFAULTS, {k: v for k, v in raw.items() if k != "contas"})
-    cfg["max_simultaneas"] = max(1, min(int(cfg["max_simultaneas"]), LIMITE_TERMOS))
-
-    qtd = max(1, min(int(cfg["quantidade_contas"]), MAX_CONTAS))
+    for chave in ("quantidade_contas", "max_simultaneas", "intervalo_inicio_segundos"):
+        valor = cfg[chave]
+        minimo = 0 if chave == "intervalo_inicio_segundos" else 1
+        if isinstance(valor, bool) or not isinstance(valor, int) or valor < minimo:
+            raise ValueError(f"{chave} precisa ser um inteiro maior ou igual a {minimo}.")
+    cfg["max_simultaneas"] = min(cfg["max_simultaneas"], LIMITE_TERMOS)
+    cfg["quantidade_contas"] = qtd = min(cfg["quantidade_contas"], MAX_CONTAS)
     listed = raw.get("contas", [])
     accounts = []
     for i in range(qtd):
@@ -181,11 +209,13 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[dict, list[Account]]:
             index=i,
             name=str(a.get("nome") or f"Conta {i + 1}"),
             folder=str(a.get("pasta") or f"conta_{i + 1:02d}"),
-            sprite=int(a.get("sprite") or DEFAULT_SPRITES[i]),
+            sprite=int(a.get("sprite") or DEFAULT_SPRITES[i % len(DEFAULT_SPRITES)]),
             hunt=str(a.get("hunt") or "").strip(),
             enabled=bool(a.get("ativa", True)),
         ))
     folders = [a.folder for a in accounts]
-    if len(set(folders)) != len(folders):
+    if any(Path(p).name != p or p in (".", "..") or ":" in p or "\\" in p or "/" in p for p in folders):
+        raise ValueError("Cada 'pasta' precisa ser um nome simples dentro de profiles.")
+    if len({p.casefold() for p in folders}) != len(folders):
         raise ValueError("Duas contas usam a mesma 'pasta' no config.toml - cada conta precisa da sua.")
     return cfg, accounts

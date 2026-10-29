@@ -528,5 +528,5 @@ class Atualizacao(QObject):
         log(f"atualização: instalador agendado (ajudante PID {ajudante}); o PokeNexus reabre na versão nova")
         # O mesmo caminho do X: closeEvent para as contas (manager.shutdown) e fecha as páginas. O
         # ajudante só roda o instalador depois que este processo terminar.
-        self.janela.close()
+        self.janela.encerrar()
         QApplication.instance().quit()
