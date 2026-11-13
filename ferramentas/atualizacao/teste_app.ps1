@@ -80,9 +80,26 @@ function Log-Atualizacao([string]$Dados) {
         ForEach-Object { Get-Content $_.FullName -Encoding UTF8 } | Where-Object { $_ -match "atualiza" }
 }
 
+Add-Type -Namespace PN -Name Fim -MemberDefinition @'
+[DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l,
+    uint flags, uint ms, out IntPtr r);
+'@
+
 function Fechar-PokeNexus($proc) {
+    # O X só deixa na bandeja: fecha de verdade pelo fim de sessão (WM_QUERYENDSESSION/WM_ENDSESSION, o
+    # mesmo caminho do Sair que o instalador usa).
     $pasta = Split-Path $proc.Path
-    if (-not $proc.HasExited) { $proc.CloseMainWindow() | Out-Null; $proc.WaitForExit(30000) | Out-Null }
+    if (-not $proc.HasExited) {
+        $proc.Refresh()
+        $h = $proc.MainWindowHandle
+        $proc.CloseMainWindow() | Out-Null
+        if (-not $proc.WaitForExit(5000) -and $h -ne [IntPtr]::Zero) {
+            $r = [IntPtr]::Zero
+            [PN.Fim]::SendMessageTimeout($h, 0x11, [IntPtr]::Zero, [IntPtr]1, 2, 60000, [ref]$r) | Out-Null
+            [PN.Fim]::SendMessageTimeout($h, 0x16, [IntPtr]1, [IntPtr]1, 2, 60000, [ref]$r) | Out-Null
+        }
+        $proc.WaitForExit(30000) | Out-Null
+    }
     Start-Sleep 2
     @(Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($pasta, [StringComparison]::OrdinalIgnoreCase) })
 }

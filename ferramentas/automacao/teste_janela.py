@@ -178,7 +178,7 @@ try:
     esperar(lambda: not m.workers[0].login_open and not web._items)
     resumo["parar_fecha_login_reserva"] = True
 finally:
-    win.encerrar()
+    win.sair()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     app.processEvents()
     resumo["loop_encerrado"] = not m._thread.is_alive()

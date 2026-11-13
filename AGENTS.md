@@ -47,6 +47,15 @@ App desktop para Windows (Python 3.11+, PySide6/Qt WebEngine) que roda até **4 
   (pacote pokesprite, que o usuário mandou); a Great Ball do botão do topo é `bola_botao.png` e a Ultra Ball
   do cabeçalho é `bola_pokedex.png`. Relatório em `docs/pokedex/RELATORIO.md`.
 - `hunts/` — motor do Hunt Analyzer; `hunts/bridge.js` usa os módulos do próprio jogo.
+- **Bandeja e fechar (13/11/2026, `docs/bandeja/RELATORIO.md`):** o X (e o Alt+F4) **esconde** na bandeja
+  (`app/bandeja.py`), com as contas, o Mercado e os vigias rodando (eles vivem na thread do Manager, não na
+  janela). **Fechar de verdade é só pelo `MainWindow.sair()`**: bandeja → Sair, fim de sessão do Windows e o
+  Restart Manager do instalador (`commitDataRequest`), atualizador. O `aboutToQuit` é só a rede de segurança.
+  `setQuitOnLastWindowClosed(False)`: nada fecha sozinho. Teste que precisa fechar o app: fim de sessão
+  (WM_QUERYENDSESSION/WM_ENDSESSION, como `instalador/fumaca.ps1`), não o X. **Uma cópia só por pasta de
+  dados** (`app/instancia.py`, mutex + `QLocalServer`): a segunda mostra a janela da primeira e sai antes de
+  criar página ou perfil; travada = pergunta se fecha; morta = o Windows solta o mutex.
+  `POKENEXUS_DATA` diferente = cópias independentes. Testes em `ferramentas/bandeja/`.
 - Modo Leve: só a opção `[desempenho] modo_leve` nas Configurações (vale ao reiniciar). **Não existe**
   mais executável separado "Leve" — o usuário não quer. **Leve 2.0** (`browser/web_host.py`): NÃO
   force `--disable-gpu` (num PC com placa deixava o jogo mais travado, medido). Com placa: GPU +

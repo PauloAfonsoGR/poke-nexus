@@ -28,7 +28,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout)
+from PySide6.QtWidgets import (QDialog,QHBoxLayout, QLabel, QProgressBar, QVBoxLayout)
 
 from app import config_edit
 from app.config import APP_NAME, APP_VERSION, CONFIG_PATH, VERSAO_DE_BUILD
@@ -526,7 +526,6 @@ class Atualizacao(QObject):
             avisar(self.janela, "Atualização", f"Não consegui iniciar a instalação.\n\n{e}", "erro")
             return
         log(f"atualização: instalador agendado (ajudante PID {ajudante}); o PokeNexus reabre na versão nova")
-        # O mesmo caminho do X: closeEvent para as contas (manager.shutdown) e fecha as páginas. O
-        # ajudante só roda o instalador depois que este processo terminar.
-        self.janela.encerrar()
-        QApplication.instance().quit()
+        # O mesmo caminho do Sair da bandeja (o X só esconde): para as contas (manager.shutdown), fecha as
+        # páginas e encerra. O ajudante só roda o instalador depois que este processo terminar.
+        self.janela.sair()

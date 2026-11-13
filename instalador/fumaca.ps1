@@ -27,13 +27,29 @@ if ($p.HasExited) { $falhas += "o processo fechou sozinho (código $($p.ExitCode
 $crash = Join-Path $dados "logs\crash.log"
 if (Test-Path $crash) { $falhas += "apareceu logs\crash.log:`n" + (Get-Content $crash -Raw) }
 
+Add-Type -Namespace PN -Name Janela -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l,
+    uint flags, uint ms, out IntPtr r);
+'@
 if (-not $p.HasExited) {
-    # Fecha como o X da janela (WM_CLOSE). Sem janela à vista (sessão sem área de trabalho), encerra.
+    # O X da janela (WM_CLOSE) deixa o PokeNexus na bandeja, com as contas rodando. Fechar de verdade é pelo
+    # Sair (MainWindow.sair), que o fim de sessão do Windows e o instalador também usam: WM_QUERYENDSESSION e
+    # WM_ENDSESSION com ENDSESSION_CLOSEAPP, como o Restart Manager manda. Sem bandeja na sessão, o X fecha.
+    # Sem janela à vista (sessão sem área de trabalho), encerra a árvore.
     $p.Refresh()
+    $h = $p.MainWindowHandle
     $fechou = $p.CloseMainWindow()
+    if ($fechou -and -not $p.WaitForExit(10000)) {
+        if ([PN.Janela]::IsWindowVisible($h)) { $falhas += "o X não escondeu a janela" }
+        Write-Host "o X deixou o PokeNexus na bandeja; fechando pelo fim de sessão (o caminho do Sair)"
+        $r = [IntPtr]::Zero
+        [PN.Janela]::SendMessageTimeout($h, 0x11, [IntPtr]::Zero, [IntPtr]1, 2, 60000, [ref]$r) | Out-Null
+        [PN.Janela]::SendMessageTimeout($h, 0x16, [IntPtr]1, [IntPtr]1, 2, 60000, [ref]$r) | Out-Null
+    }
     if (-not $p.WaitForExit(30000)) {
-        if ($fechou) { $falhas += "não fechou em 30 s depois do X" }
-        Write-Host "sem janela para fechar no X: encerrando a árvore do processo"
+        if ($fechou) { $falhas += "não fechou em 30 s pelo caminho do Sair" }
+        Write-Host "sem janela para fechar: encerrando a árvore do processo"
         taskkill /PID $p.Id /T /F | Out-Null
         $p.WaitForExit(15000) | Out-Null
     }
@@ -47,5 +63,5 @@ if ($falhas.Count) {
     Write-Host "FUMAÇA FALHOU:"; $falhas | ForEach-Object { Write-Host " - $_" }
     exit 1
 }
-Write-Host "Fumaça ok: abriu, ficou $Segundos s de pé, sem crash.log, fechou e não sobrou processo."
+Write-Host "Fumaça ok: abriu, ficou $Segundos s de pé, sem crash.log, fechou pelo Sair e não sobrou processo."
 exit 0

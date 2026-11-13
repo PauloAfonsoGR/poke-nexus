@@ -958,14 +958,22 @@ class MainWindow(QMainWindow):
         self.web = web
         self.cfg = manager.cfg
         self._encerrando = False
+        self._parado = False
         self._segundo_plano = False
+        # Como a janela estava antes de ir para a bandeja (main.py abre maximizada).
+        self._estado_visivel = Qt.WindowMaximized
         self.selected = 0
         self.grid_mode = False
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(ASSETS_DIR / "pokenexus.ico")))
         self.bandeja = Bandeja(self)
         self.bandeja.abrir.connect(self.restaurar)
-        self.bandeja.sair.connect(self.encerrar)
+        self.bandeja.sair.connect(self.sair)
+        # Fim de sessão do Windows (desligar, reiniciar, sair da conta) e o Restart Manager do instalador:
+        # fecham pelo mesmo caminho do Sair. O aboutToQuit é a rede de segurança para qualquer outro quit.
+        app = QApplication.instance()
+        app.commitDataRequest.connect(self._fim_de_sessao, Qt.DirectConnection)
+        app.aboutToQuit.connect(self._parar_tudo, Qt.DirectConnection)
         self.resize(1600, 1000)
         self.setMinimumSize(760, 600)
         carregar_fontes()
@@ -1134,7 +1142,8 @@ class MainWindow(QMainWindow):
             "A automação é permitida pelos Termos do PokeIdle, com no máximo "
             f"{LIMITE_TERMOS} contas por pessoa. O servidor também limita rede e aparelho.",
             "O limite local em Ajustes não altera o limite do servidor.",
-            "Na bandeja: Abrir PokeNexus ou Sair e parar as contas.",
+            "Fechar no X deixa o PokeNexus na bandeja (perto do relógio; no Windows 11 pode estar na "
+            "setinha ^). Para fechar de verdade: ícone da bandeja → Sair.",
             "Os atalhos mudam em Ajustes.",
             "",
             "Erro de conexão só no PokeNexus?",
@@ -1453,7 +1462,8 @@ class MainWindow(QMainWindow):
         if self._segundo_plano:
             self._drain_logs(render=False)
             self.pokedex.observar()
-            self.bandeja.atualizar(self.m.connected_count(), len(self.m.accounts))
+            jogando, _ini, com_erro, _login = self._contagem()
+            self.bandeja.atualizar(jogando, com_erro)
             return
         snap = self.m.snapshot()
         for t, s in zip(self.tabs, snap):
@@ -1531,15 +1541,21 @@ class MainWindow(QMainWindow):
         self.b_pokedex.setText("" if curto else " Pokédex")
         self._mostrar_contador()
 
-    def _mostrar_contador(self):
-        """O topo conta só as contas jogando de verdade (ligadas ao servidor do jogo: farm, batalha, esperando,
-        manual ou pausada). Conta iniciada que não conectou (ex.: erro de rede) não entra. O limite dos Termos
-        continua sendo conferido pelo Manager.connected_count/can_connect, que contam as iniciadas."""
+    def _contagem(self) -> tuple[int, int, int, int]:
+        """(jogando, iniciadas, com erro, esperando o login): o que o contador do topo e a bandeja mostram."""
         jogando = sum(1 for w in self.m.workers
                       if w.running and w.game is not None and w.game.welcomed and w.status in JOGANDO)
         iniciadas = self.m.connected_count()
         com_erro = sum(1 for w in self.m.workers if w.running and w.status == "ERRO")
         login = sum(1 for w in self.m.workers if w.login_open or (w.running and w.status == "SESSÃO EXPIRADA"))
+        return jogando, iniciadas, com_erro, login
+
+    def _mostrar_contador(self):
+        """O topo conta só as contas jogando de verdade (ligadas ao servidor do jogo: farm, batalha, esperando,
+        manual ou pausada). Conta iniciada que não conectou (ex.: erro de rede) não entra. O limite dos Termos
+        continua sendo conferido pelo Manager.connected_count/can_connect, que contam as iniciadas."""
+        jogando, iniciadas, com_erro, login = self._contagem()
+        self.bandeja.atualizar(jogando, com_erro)
         lim = self.cfg["max_simultaneas"]
         self.counter.setText(f"{jogando}/{lim}" if self._topo_curto else f"{jogando}/{lim} jogando")
         dica = (f"Jogando agora: {jogando}\nIniciadas: {iniciadas}\nCom erro: {com_erro}\n"
@@ -1596,6 +1612,8 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, e):
         if e.type() == QEvent.WindowStateChange:
+            if not self.isMinimized():
+                self._estado_visivel = self.windowState() & (Qt.WindowMaximized | Qt.WindowFullScreen)
             if self.isMinimized() and self.cfg["janela"].get("minimizar_para_bandeja", True):
                 QTimer.singleShot(0, lambda: self.enviar_bandeja() if self.isMinimized() else None)
             self._sincronizar_segundo_plano()
@@ -1621,22 +1639,54 @@ class MainWindow(QMainWindow):
             self._rerender_log()
             self.refresh()
 
+    # ------------------------------------------------- bandeja e fechar de verdade
+    # O X (e o Alt+F4, que o Windows trata igual) só ESCONDE: as contas, o Mercado, os vigias e o log seguem
+    # na thread do Manager, que não depende da janela. Fechar de verdade é só pelo `sair()`.
     def enviar_bandeja(self):
         if not self._encerrando and self.bandeja.disponivel:
             self.bandeja.icone.show()
             self.hide()
+            self.bandeja.avisar_primeira_vez()
 
     def restaurar(self):
+        """Mostra a janela como estava (maximizada ou não, mesma conta e mesma tela) e traz para a frente."""
         if self._encerrando:
             return
-        self.showNormal()
+        if self._estado_visivel & Qt.WindowFullScreen:
+            self.showFullScreen()
+        elif self._estado_visivel & Qt.WindowMaximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
         self.raise_()
         self.activateWindow()
 
-    def encerrar(self):
+    def sair(self):
+        """O único jeito de fechar de verdade (bandeja: Sair; fim de sessão do Windows; atualizador): para as
+        contas (Manager.shutdown), fecha as páginas e encerra o programa."""
         self._encerrando = True
+        self._parar_tudo()
         self.close()
         QApplication.instance().quit()
+
+    def _parar_tudo(self):
+        """Para as contas e fecha as páginas, uma vez só (sair, X sem bandeja e a rede do aboutToQuit)."""
+        if self._parado:
+            return
+        self._parado = True
+        self._encerrando = True
+        self.timer.stop()
+        self.bandeja.fechar()
+        self.setEnabled(False)
+        self.m.shutdown()
+        self.web.close_all()
+
+    def _fim_de_sessao(self, _sessao):
+        """Windows desligando, reiniciando, saindo da conta, ou o instalador pedindo para fechar."""
+        if self._parado:
+            return
+        self.m._log(None, "o Windows pediu para fechar (fim de sessão ou instalador): saindo pelo Sair")
+        self.sair()
 
     def closeEvent(self, e):
         if (not self._encerrando and self.cfg["janela"].get("fechar_para_bandeja", True)
@@ -1644,10 +1694,7 @@ class MainWindow(QMainWindow):
             e.ignore()
             self.enviar_bandeja()
             return
-        self._encerrando = True
-        self.timer.stop()
-        self.bandeja.fechar()
-        self.setEnabled(False)
-        self.m.shutdown()
-        self.web.close_all()
+        # X com a bandeja desligada em Ajustes (ou sem bandeja no Windows): fecha de verdade.
+        self._parar_tudo()
         e.accept()
+        QApplication.instance().quit()

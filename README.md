@@ -111,9 +111,16 @@ ative em **Ajustes → Geral → Iniciar as contas ativas ao abrir o programa**.
 - Faça login uma vez em cada perfil e escolha uma hunt. Depois disso, a sessão salva e a última hunt
   permitem retomar o farm ao abrir. Uma hunt fixa em Ajustes tem prioridade. Sessão expirada,
   CAPTCHA, termos novos e criação de personagem ainda precisam da sua ação.
-- Fechar no **X** ou minimizar envia para a bandeja e mantém as contas rodando. No menu do ícone:
-  **Abrir PokeNexus** restaura; **Sair e parar as contas** encerra o programa e as sessões.
-  Sem bandeja disponível, o X encerra normalmente. As opções ficam em Ajustes → Geral.
+- Fechar no **X** deixa o PokeNexus na bandeja (perto do relógio; no Windows 11 pode estar na setinha ^),
+  com as contas rodando. Para fechar de verdade: ícone da bandeja → **Sair**. Minimizar também envia para a
+  bandeja. Clique (ou duplo clique) no ícone traz a janela de volta como estava. Botão direito: quantas contas
+  estão jogando, **Abrir PokeNexus** e **Sair**. Na primeira vez de cada sessão um aviso do Windows lembra
+  disso. Sem bandeja disponível, o X encerra normalmente. As opções ficam em Ajustes → Geral.
+- Desligar, reiniciar ou sair da conta do Windows, o instalador e a atualização fecham pelo mesmo caminho do
+  **Sair** (as contas param com segurança).
+- **Uma cópia só:** abrir o atalho com o PokeNexus já aberto (mesmo escondido na bandeja) só mostra a janela
+  dele; duas cópias usariam os mesmos perfis e o jogo derrubaria a sessão. Se a cópia aberta estiver travada,
+  o PokeNexus pergunta se pode fechar a travada e abrir de novo.
 - **Abrir o programa na bandeja** é opcional. Não configura a inicialização junto com o Windows.
 - Em segundo plano, a interface atualiza a cada cinco segundos e pausa as animações. Com
   **Ajustes → Desempenho → Usar a economia do jogo enquanto estiver em segundo plano**, o programa
@@ -513,6 +520,8 @@ PokeNexus.spec, build.bat   build do executável
 instalador/                 instalador (Inno Setup), teste de fumaça e versões exatas do build
 .github/workflows/release.yml  publica a versão (Release) a cada commit na main
 app/atualizacao.py          aviso de atualização (procura, faixa, download, SHA-256, instala)
+app/bandeja.py              ícone da bandeja (clique, menu Abrir/Sair, status, aviso)
+app/instancia.py            uma cópia só por pasta de dados (a segunda mostra a janela da primeira)
 app/config.py               caminhos (programa x dados do usuário) e leitura da configuração
 app/manager.py              loop asyncio com um worker por conta, watchdog, logs
 app/gui.py, app/widgets.py  interface PySide6 (visão individual e Todas as contas)
